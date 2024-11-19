@@ -17,11 +17,22 @@ import { pipe, Effect, Layer } from "effect";
 import * as H from "hyper-ts";
 import * as M from "hyper-ts/Middleware";
 import express, { ErrorRequestHandler } from "express";
+import { Task } from "fp-ts/lib/Task";
+
+const delayTask: (ms: number) => Task<void> = (ms) => () =>
+  new Promise((res) => setTimeout(res, ms));
 
 const a: M.Middleware<H.StatusOpen, H.ResponseEnded, never, void> = pipe(
   M.status(H.Status.OK),
   M.ichain(() => M.closeHeaders()),
   M.ichain(() => M.send("GOT a"))
+);
+
+const delayM: M.Middleware<H.StatusOpen, H.ResponseEnded, never, void> = pipe(
+  M.fromTask<void, H.StatusOpen, never>(delayTask(5000)),
+  M.ichain(() => M.status(H.Status.OK)),
+  M.ichain(() => M.closeHeaders()),
+  M.ichain(() => M.send("GOT delay"))
 );
 
 const ExpressApp: HttpApp.Default<never, HttpServerRequest.HttpServerRequest> =
@@ -30,12 +41,9 @@ const ExpressApp: HttpApp.Default<never, HttpServerRequest.HttpServerRequest> =
     const nodeRequest = NodeHttpServerRequest.toIncomingMessage(req);
     const nodeResponse = NodeHttpServerRequest.toServerResponse(req);
 
-    console.log("RUN....");
-
     return yield* Effect.async<HttpServerResponse.HttpServerResponse>(
       (resume) => {
         nodeResponse.on("close", () => {
-          console.log("CLOSING....");
           resume(
             Effect.succeed(
               HttpServerResponse.empty({
@@ -47,11 +55,10 @@ const ExpressApp: HttpApp.Default<never, HttpServerRequest.HttpServerRequest> =
           );
         });
 
-        console.log("express");
         express()
           .get("/a", toRequestHandler(a))
+          .get("/delay", toRequestHandler(delayM))
           .use(((error, req, res, next) => {
-            console.log("express error", { error });
             if (
               error instanceof Error &&
               "code" in error &&
