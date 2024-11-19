@@ -1,41 +1,80 @@
 import {
+  HttpApp,
   HttpMiddleware,
   HttpRouter,
   HttpServer,
+  HttpServerRequest,
   HttpServerResponse,
 } from "@effect/platform";
 import { createServer } from "node:http";
-import { NodeRuntime, NodeHttpServer } from "@effect/platform-node";
+import { toRequestHandler } from "hyper-ts/express";
+import {
+  NodeRuntime,
+  NodeHttpServer,
+  NodeHttpServerRequest,
+} from "@effect/platform-node";
 import { pipe, Effect, Layer } from "effect";
 import * as H from "hyper-ts";
 import * as M from "hyper-ts/Middleware";
+import express, { ErrorRequestHandler } from "express";
 
 const a: M.Middleware<H.StatusOpen, H.ResponseEnded, never, void> = pipe(
   M.status(H.Status.OK),
   M.ichain(() => M.closeHeaders()),
-  M.ichain(() => M.send("A"))
+  M.ichain(() => M.send("GOT a"))
 );
 
-const b: M.Middleware<H.StatusOpen, H.ResponseEnded, never, void> = pipe(
-  M.status(H.Status.OK),
-  M.ichain(() => M.closeHeaders()),
-  M.ichain(() => M.send("B"))
-);
+const ExpressApp: HttpApp.Default<never, HttpServerRequest.HttpServerRequest> =
+  Effect.gen(function* () {
+    const req = yield* HttpServerRequest.HttpServerRequest;
+    const nodeRequest = NodeHttpServerRequest.toIncomingMessage(req);
+    const nodeResponse = NodeHttpServerRequest.toServerResponse(req);
 
-const c: M.Middleware<H.StatusOpen, H.ResponseEnded, never, void> = pipe(
-  M.status(H.Status.OK),
-  M.ichain(() => M.closeHeaders()),
-  M.ichain(() => M.send("C"))
-);
+    console.log("RUN....");
+
+    return yield* Effect.async<HttpServerResponse.HttpServerResponse>(
+      (resume) => {
+        nodeResponse.on("close", () => {
+          console.log("CLOSING....");
+          resume(
+            Effect.succeed(
+              HttpServerResponse.empty({
+                status: nodeResponse.writableFinished
+                  ? nodeResponse.statusCode
+                  : 499,
+              })
+            )
+          );
+        });
+
+        console.log("express");
+        express()
+          .get("/a", toRequestHandler(a))
+          .use(((error, req, res, next) => {
+            console.log("express error", { error });
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ERR_HTTP_HEADERS_SENT"
+            ) {
+              return next();
+            }
+
+            next(error);
+          }) satisfies ErrorRequestHandler)(nodeRequest, nodeResponse);
+      }
+    );
+  });
 
 const router = HttpRouter.empty.pipe(
-  HttpRouter.get("/b", HttpServerResponse.text("b", { status: 200 })),
-  HttpRouter.get("/c", HttpServerResponse.text("c", { status: 200 }))
+  HttpRouter.get("/b", HttpServerResponse.text("Got b", { status: 200 })),
+  HttpRouter.get("/c", HttpServerResponse.text("Got c", { status: 200 }))
 );
 
 const ServerLive = NodeHttpServer.layer(() => createServer(), { port: 3000 });
 const app = pipe(
   router,
+  Effect.catchTag("RouteNotFound", () => ExpressApp),
   HttpServer.serve(HttpMiddleware.logger),
   HttpServer.withLogAddress,
   Layer.provide(ServerLive)
