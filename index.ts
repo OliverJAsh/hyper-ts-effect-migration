@@ -81,13 +81,3 @@ const app = pipe(
 );
 
 NodeRuntime.runMain(Layer.launch(app));
-
-// express()
-//   // Express middlewares
-//   // Note:  We could get rid of this if we're able to call hyper-ts route handlers/middlewares inside platform.
-//   .get("/a", toRequestHandler(a))
-//   // Finally, the platform handler
-//   .use(handler)
-//   .listen(3000, () =>
-//     console.log("Express listening on port 3000. Use: GET /")
-//   );
